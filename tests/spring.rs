@@ -5,7 +5,7 @@
 //! equation of motion itself or a property the animation must have (no
 //! overshoot, finiteness, frame-rate independence, ...).
 
-use springs::{Spring, SpringConfig};
+use springs::{Spring, SpringConfig, SpringDelta, SpringValue};
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -40,7 +40,7 @@ fn regimes() -> [(&'static str, SpringConfig); 3] {
 }
 
 /// A unit step: sitting at 0, asked to travel to 1, at rest.
-fn step(config: SpringConfig) -> Spring {
+fn step(config: SpringConfig) -> Spring<f64> {
     Spring::new(0.0).with_target(1.0).with_config(config)
 }
 
@@ -58,7 +58,7 @@ fn assert_close(actual: f64, expected: f64, tolerance: f64, what: &str) {
 }
 
 /// Steps `spring` forward by `seconds`, one `1.0 / rate` frame at a time.
-fn advance_for(spring: &mut Spring, seconds: f64, rate: f64) {
+fn advance_for(spring: &mut Spring<f64>, seconds: f64, rate: f64) {
     let dt = 1.0 / rate;
     for _ in 0..(seconds * rate).round() as u32 {
         spring.advance(dt);
@@ -684,4 +684,126 @@ fn the_velocity_threshold_scales_with_the_frequency() {
              expected about {EPSILON} — the two thresholds are not tripping together"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Generic values
+// ---------------------------------------------------------------------------
+
+/// A second value type, so the generic machinery is exercised by something that
+/// is not `f64` with extra steps: a 2D point whose delta is a 2D vector and
+/// whose magnitude is a euclidean length rather than an absolute value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Vec2 {
+    x: f64,
+    y: f64,
+}
+
+impl Vec2 {
+    fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+}
+
+impl SpringDelta for Vec2 {
+    fn zero() -> Self {
+        Self::new(0.0, 0.0)
+    }
+
+    fn add(self, other: Self) -> Self {
+        Self::new(self.x + other.x, self.y + other.y)
+    }
+
+    fn scale(self, scalar: f64) -> Self {
+        Self::new(self.x * scalar, self.y * scalar)
+    }
+
+    fn magnitude(self) -> f64 {
+        self.x.hypot(self.y)
+    }
+}
+
+impl SpringValue for Vec2 {
+    type Delta = Self;
+
+    fn displacement_from(self, target: Self) -> Self::Delta {
+        Self::new(self.x - target.x, self.y - target.y)
+    }
+
+    fn add_displacement(self, displacement: Self::Delta) -> Self {
+        self.add(displacement)
+    }
+}
+
+/// The solver applies the same scalar coefficients to every component, so a 2D
+/// spring has to be exactly two independent 1D springs. Any per-component
+/// coupling — a normalisation, a magnitude sneaking into the maths — shows up
+/// here as a divergence between the axes.
+#[test]
+fn a_two_dimensional_spring_is_two_scalar_springs() {
+    for (regime, config) in regimes() {
+        // A tiny epsilon keeps the settle snap out of the comparison: it uses a
+        // euclidean length for the point and a per-axis one for the scalars, so
+        // the two legitimately stop at slightly different moments.
+        let epsilon = 1e-12;
+
+        let mut point = Spring::new(Vec2::new(0.0, 0.0))
+            .with_target(Vec2::new(3.0, -4.0))
+            .with_velocity(Vec2::new(1.5, 2.5))
+            .with_config(config)
+            .with_epsilon(epsilon);
+
+        let mut x = Spring::new(0.0)
+            .with_target(3.0)
+            .with_velocity(1.5)
+            .with_config(config)
+            .with_epsilon(epsilon);
+
+        let mut y = Spring::new(0.0)
+            .with_target(-4.0)
+            .with_velocity(2.5)
+            .with_config(config)
+            .with_epsilon(epsilon);
+
+        for frame in 0..240 {
+            for spring in [&mut x, &mut y] {
+                spring.advance(1.0 / 240.0);
+            }
+            point.advance(1.0 / 240.0);
+
+            let at = format!("{regime} on frame {frame}");
+            assert_eq!(
+                point.value(),
+                Vec2::new(x.value(), y.value()),
+                "value, {at}"
+            );
+            assert_eq!(
+                point.velocity(),
+                Vec2::new(x.velocity(), y.velocity()),
+                "velocity, {at}"
+            );
+        }
+    }
+}
+
+/// Settling for a non-scalar value is a question about the length of the
+/// displacement, not about any one component.
+#[test]
+fn a_two_dimensional_spring_settles_on_its_target() {
+    let mut spring = Spring::new(Vec2::new(0.0, 0.0))
+        .with_target(Vec2::new(3.0, -4.0))
+        .with_config(critically_damped())
+        .with_epsilon(0.001);
+
+    // A displacement of (3, -4) has length 5, so it starts far from settled
+    // even though neither component is especially large.
+    assert!(!spring.is_settled());
+
+    for _ in 0..1_200 {
+        spring.advance(1.0 / 240.0);
+    }
+
+    assert!(spring.is_settled(), "never settled");
+    assert_eq!(spring.value(), Vec2::new(3.0, -4.0), "settled off target");
+    assert_eq!(spring.velocity(), Vec2::zero(), "settled still moving");
 }

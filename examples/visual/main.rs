@@ -79,9 +79,9 @@ struct Lane {
     config: SpringConfig,
 
     /// Stepped once per rendered frame.
-    spring: Spring,
+    spring: Spring<f64>,
     /// The state when the target was last moved, plus the time since.
-    snapshot: Spring,
+    snapshot: Spring<f64>,
     elapsed: f64,
 
     trace: VecDeque<f64>,
@@ -135,7 +135,7 @@ impl Lane {
     }
 
     /// The same interval, integrated in one analytical step instead of many.
-    fn reference(&self) -> Spring {
+    fn reference(&self) -> Spring<f64> {
         let mut reference = self.snapshot;
         reference.advance(self.elapsed);
         reference

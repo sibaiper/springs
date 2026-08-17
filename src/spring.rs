@@ -3,22 +3,94 @@ use crate::solver::solve;
 
 const DEFAULT_EPSILON: f64 = 0.001;
 
+/// A value a spring can animate.
+///
+/// The value itself only needs to know how to subtract to a [`SpringDelta`] and
+/// how to add one back. Everything else happens in the delta, which is where
+/// the physics lives — that split is what lets a spring animate a type that is
+/// not itself a vector space, like a colour or a point on a curve.
+pub trait SpringValue: Copy {
+    /// The difference between two values. For a scalar this is the same type;
+    /// for a point it would be the corresponding vector.
+    type Delta: SpringDelta;
+
+    /// The displacement of `self` from `target`, i.e. `self - target`.
+    fn displacement_from(self, target: Self) -> Self::Delta;
+
+    /// `self` displaced by `displacement`, i.e. `self + displacement`.
+    fn add_displacement(self, displacement: Self::Delta) -> Self;
+}
+
+/// The vector space the solver integrates in.
+///
+/// The closed-form solution is a linear combination of the initial displacement
+/// and velocity, so scaling by an `f64` and adding are the only operations it
+/// needs — there is never a delta multiplied by another delta. `magnitude` is
+/// separate: it is the one place a delta collapses to a scalar, so the spring
+/// can compare it against its epsilon.
+pub trait SpringDelta: Copy {
+    fn zero() -> Self;
+
+    fn add(self, other: Self) -> Self;
+
+    fn scale(self, scalar: f64) -> Self;
+
+    /// The length of this delta, as a scalar.
+    fn magnitude(self) -> f64;
+}
+
+impl SpringDelta for f64 {
+    fn zero() -> Self {
+        0.0
+    }
+
+    fn add(self, other: Self) -> Self {
+        self + other
+    }
+
+    fn scale(self, scalar: f64) -> Self {
+        self * scalar
+    }
+
+    fn magnitude(self) -> f64 {
+        self.abs()
+    }
+}
+
+impl SpringValue for f64 {
+    type Delta = f64;
+
+    fn displacement_from(self, target: Self) -> Self::Delta {
+        self - target
+    }
+
+    fn add_displacement(self, displacement: Self::Delta) -> Self {
+        self + displacement
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
-pub struct Spring {
-    value: f64,
-    target: f64,
-    velocity: f64,
+pub struct Spring<T>
+where
+    T: SpringValue,
+{
+    value: T,
+    target: T,
+    velocity: T::Delta,
 
     epsilon: f64,
     config: SpringConfig,
 }
 
-impl Spring {
-    pub fn new(value: f64) -> Self {
+impl<T> Spring<T>
+where
+    T: SpringValue,
+{
+    pub fn new(value: T) -> Self {
         Self {
             value,
             target: value,
-            velocity: 0.0,
+            velocity: T::Delta::zero(),
             epsilon: DEFAULT_EPSILON,
             config: SpringConfig::default(),
         }
@@ -38,25 +110,25 @@ impl Spring {
         self
     }
 
-    pub fn with_target(mut self, target: f64) -> Self {
+    pub fn with_target(mut self, target: T) -> Self {
         self.target = target;
         self
     }
-    pub fn with_velocity(mut self, velocity: f64) -> Self {
+    pub fn with_velocity(mut self, velocity: T::Delta) -> Self {
         self.velocity = velocity;
         self
     }
 
     // getters
-    pub fn value(&self) -> f64 {
+    pub fn value(&self) -> T {
         self.value
     }
 
-    pub fn velocity(&self) -> f64 {
+    pub fn velocity(&self) -> T::Delta {
         self.velocity
     }
 
-    pub fn target(&self) -> f64 {
+    pub fn target(&self) -> T {
         self.target
     }
 
@@ -65,7 +137,7 @@ impl Spring {
     }
 
     // setters
-    pub fn set_target(&mut self, target: f64) {
+    pub fn set_target(&mut self, target: T) {
         self.target = target;
     }
 
@@ -77,18 +149,18 @@ impl Spring {
 
         self.epsilon = epsilon;
     }
-    pub fn set_velocity(&mut self, velocity: f64) {
+    pub fn set_velocity(&mut self, velocity: T::Delta) {
         self.velocity = velocity;
     }
 
-    pub fn add_velocity(&mut self, velocity: f64) {
-        self.velocity += velocity;
+    pub fn add_velocity(&mut self, velocity: T::Delta) {
+        self.velocity = self.velocity.add(velocity);
     }
 
-    pub fn snap_to(&mut self, value: f64) {
+    pub fn snap_to(&mut self, value: T) {
         self.value = value;
         self.target = value;
-        self.velocity = 0.0;
+        self.velocity = T::Delta::zero();
     }
 
     pub fn advance(&mut self, dt: f64) {
@@ -96,7 +168,7 @@ impl Spring {
             return;
         }
 
-        let displacement = self.value - self.target;
+        let displacement = self.value.displacement_from(self.target);
 
         let state = solve(
             displacement,
@@ -106,12 +178,12 @@ impl Spring {
             dt,
         );
 
-        self.value = self.target + state.displacement;
+        self.value = self.target.add_displacement(state.displacement);
         self.velocity = state.velocity;
 
         if self.is_settled() {
             self.value = self.target;
-            self.velocity = 0.0;
+            self.velocity = T::Delta::zero();
         }
     }
 
@@ -123,7 +195,7 @@ impl Spring {
     /// `epsilon` of travel left. Pairing them this way makes both conditions
     /// trip at the same moment instead of leaving the velocity one to dominate.
     pub fn is_settled(&self) -> bool {
-        (self.value - self.target).abs() < self.epsilon
-            && self.velocity.abs() < self.epsilon * self.config.angular_frequency()
+        self.value.displacement_from(self.target).magnitude() < self.epsilon
+            && self.velocity.magnitude() < self.epsilon * self.config.angular_frequency()
     }
 }
