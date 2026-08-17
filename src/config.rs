@@ -15,14 +15,21 @@ impl SpringConfig {
     }
 
     pub fn duration(mut self, duration: f64) -> Self {
-        assert!(duration > 0.0);
+        assert!(
+            duration.is_finite() && duration > 0.0,
+            "spring duration must be finite and greater than zero"
+        );
 
         self.angular_frequency = TAU / duration;
         self
     }
 
     pub fn bounce(mut self, bounce: f64) -> Self {
-        assert!((-1.0..=1.0).contains(&bounce));
+        assert!(
+            (-1.0..1.0).contains(&bounce),
+            "spring bounce must be in -1.0..1.0; a bounce of 1.0 is an undamped \
+             spring, which oscillates for ever and never settles"
+        );
 
         self.damping_ratio = 1.0 - bounce;
         self
@@ -90,33 +97,45 @@ impl Default for SpringConfig {
     }
 }
 
+/// Stiffness and damping are only meaningful next to a mass, so the terms the
+/// caller leaves out are derived at `build` time from the ones they set rather
+/// than fixed up front. That keeps "unset" meaning the same thing it means for
+/// [`SpringConfig::default`] — the default duration and the default bounce —
+/// however the other terms are changed.
 pub struct PhysicalSpringBuilder {
     mass: f64,
-    stiffness: f64,
-    damping: f64,
+    stiffness: Option<f64>,
+    damping: Option<f64>,
 }
 
 impl Default for PhysicalSpringBuilder {
     fn default() -> Self {
-        let mass = 1.0;
-        let damping_ratio = 1.0 - DEFAULT_BOUNCE;
-        let angular_frequency = TAU / DEFAULT_DURATION;
-
-        let stiffness = mass * angular_frequency * angular_frequency;
-
-        let damping = 2.0 * damping_ratio * mass * angular_frequency;
-
         Self {
-            mass,
-            stiffness,
-            damping,
+            mass: 1.0,
+            stiffness: None,
+            damping: None,
         }
     }
 }
 
 impl From<PhysicalSpringBuilder> for SpringConfig {
     fn from(value: PhysicalSpringBuilder) -> Self {
-        SpringConfig::from_physical(value.mass, value.stiffness, value.damping)
+        // An unset stiffness is whatever this mass needs to oscillate at the
+        // default duration: ω₀ = √(k/m), so k = m·ω₀².
+        let stiffness = value.stiffness.unwrap_or_else(|| {
+            let angular_frequency = TAU / DEFAULT_DURATION;
+            value.mass * angular_frequency * angular_frequency
+        });
+
+        // An unset damping is the default bounce at the frequency the mass and
+        // stiffness actually produce — not the default one, which the caller
+        // may have just moved by setting either of them.
+        let damping = value.damping.unwrap_or_else(|| {
+            let angular_frequency = (stiffness / value.mass).sqrt();
+            2.0 * (1.0 - DEFAULT_BOUNCE) * value.mass * angular_frequency
+        });
+
+        SpringConfig::from_physical(value.mass, stiffness, damping)
     }
 }
 
@@ -127,12 +146,12 @@ impl PhysicalSpringBuilder {
     }
 
     pub fn stiffness(mut self, stiffness: f64) -> Self {
-        self.stiffness = stiffness;
+        self.stiffness = Some(stiffness);
         self
     }
 
     pub fn damping(mut self, damping: f64) -> Self {
-        self.damping = damping;
+        self.damping = Some(damping);
         self
     }
 

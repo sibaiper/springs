@@ -406,6 +406,141 @@ fn overdamped_spring_does_not_overshoot() {
 // Configuration
 // ---------------------------------------------------------------------------
 
+/// `duration`/`bounce` are the ergonomic front door to a config, so they have
+/// to accept the ordinary values and agree with the all-at-once constructor.
+#[test]
+fn duration_and_bounce_build_the_same_config_as_from_duration_bounce() {
+    let built = SpringConfig::new().duration(0.4).bounce(0.25);
+    let direct = SpringConfig::from_duration_bounce(0.4, 0.25);
+
+    assert_eq!(built.angular_frequency(), direct.angular_frequency());
+    assert_eq!(built.damping_ratio(), direct.damping_ratio());
+    assert_close(
+        built.angular_frequency(),
+        std::f64::consts::TAU / 0.4,
+        1e-12,
+        "ω₀ from a 0.4 s duration",
+    );
+
+    // Order must not matter, and neither setter may disturb the other.
+    let reversed = SpringConfig::new().bounce(0.25).duration(0.4);
+    assert_eq!(reversed.angular_frequency(), built.angular_frequency());
+    assert_eq!(reversed.damping_ratio(), built.damping_ratio());
+}
+
+/// The degenerate configs have to be rejected at construction rather than
+/// producing a spring that never arrives: ω₀ = 0 drifts in a straight line for
+/// ever, and NaN poisons every value that touches it.
+#[test]
+fn duration_rejects_non_finite_and_non_positive_values() {
+    const REJECTED: [f64; 5] = [0.0, -0.5, f64::INFINITY, f64::NEG_INFINITY, f64::NAN];
+
+    // Silence the panic hook so the rejections do not litter the test output,
+    // then restore it before asserting so a real failure still prints.
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+
+    let accepted: Vec<f64> = REJECTED
+        .into_iter()
+        .filter(|&duration| {
+            std::panic::catch_unwind(|| SpringConfig::new().duration(duration)).is_ok()
+        })
+        .collect();
+
+    std::panic::set_hook(previous_hook);
+
+    assert!(
+        accepted.is_empty(),
+        "duration() accepted the degenerate values {accepted:?}"
+    );
+}
+
+/// A config built through `duration` must produce a spring that actually
+/// converges — the symptom an ω₀ = 0 config would show.
+#[test]
+fn duration_produces_a_spring_that_settles() {
+    let mut spring = Spring::new(0.0)
+        .with_target(1.0)
+        .with_config(SpringConfig::new().duration(0.4).bounce(0.0));
+
+    advance_for(&mut spring, 5.0, 240.0);
+
+    assert!(spring.is_settled(), "spring never settled");
+    assert_eq!(spring.value(), 1.0);
+    assert_eq!(spring.velocity(), 0.0);
+}
+
+/// Whatever the caller leaves unset in the physical builder has to keep meaning
+/// what it means for a default config: the default duration and the default
+/// bounce. Setting only the mass must not quietly turn the default critical
+/// spring into a bouncy one, because stiffness and damping are only meaningful
+/// relative to the mass they act on.
+#[test]
+fn physical_builder_defaults_track_the_terms_that_were_set() {
+    let default = SpringConfig::default();
+
+    let matches_default = |config: SpringConfig, what: &str| {
+        assert_close(config.damping_ratio(), default.damping_ratio(), 1e-12, what);
+        assert_close(
+            config.angular_frequency(),
+            default.angular_frequency(),
+            1e-12,
+            what,
+        );
+    };
+
+    matches_default(SpringConfig::physical().build(), "no terms set");
+
+    // Only the mass: both derived terms follow it, so the feel is unchanged.
+    for mass in [0.1, 0.5, 2.0, 50.0] {
+        matches_default(
+            SpringConfig::physical().mass(mass).build(),
+            &format!("mass {mass} alone"),
+        );
+    }
+
+    // An explicit stiffness moves ω₀ — that is the point of setting it — but an
+    // unset damping still has to mean the default bounce at the new frequency.
+    for (mass, stiffness) in [(2.0, 200.0), (1.0, 50.0), (4.0, 900.0)] {
+        let config = SpringConfig::physical()
+            .mass(mass)
+            .stiffness(stiffness)
+            .build();
+
+        assert_close(
+            config.damping_ratio(),
+            1.0,
+            1e-12,
+            &format!("ζ with mass {mass}, stiffness {stiffness} and no damping"),
+        );
+        assert_close(
+            config.angular_frequency(),
+            (stiffness / mass).sqrt(),
+            1e-12,
+            &format!("ω₀ with mass {mass} and stiffness {stiffness}"),
+        );
+    }
+
+    // Likewise an explicit damping with an unset stiffness: ω₀ stays default.
+    let damped = SpringConfig::physical().mass(2.0).damping(20.0).build();
+    assert_close(
+        damped.angular_frequency(),
+        default.angular_frequency(),
+        1e-12,
+        "ω₀ with an explicit damping only",
+    );
+
+    // And once every term is given, the builder is a pure pass-through.
+    let built = SpringConfig::physical()
+        .mass(2.0)
+        .stiffness(200.0)
+        .damping(8.0)
+        .build();
+    let direct = SpringConfig::from_physical(2.0, 200.0, 8.0);
+    assert_eq!(built.damping_ratio(), direct.damping_ratio());
+    assert_eq!(built.angular_frequency(), direct.angular_frequency());
+}
+
 /// Mass/stiffness/damping is the physicist's parameterisation; the solver wants
 /// ζ and ω₀. Check the conversion, then check the converted numbers actually
 /// reach the solver by measuring the resulting motion.
@@ -463,4 +598,90 @@ fn physical_config_produces_expected_damping_and_frequency() {
 
     assert_close(peak_time, expected_time, 2.0 * dt, "time of first peak");
     assert_close(peak_value, expected_peak, 1e-3, "height of first peak");
+}
+
+// ---------------------------------------------------------------------------
+// Settling
+// ---------------------------------------------------------------------------
+
+/// Counts the frames a 0 → `travel` step takes to settle, at 1 kHz.
+fn frames_to_settle(config: SpringConfig, travel: f64, epsilon: f64) -> u32 {
+    let mut spring = Spring::new(0.0)
+        .with_target(travel)
+        .with_config(config)
+        .with_epsilon(epsilon);
+
+    let mut frames = 0;
+    while !spring.is_settled() {
+        spring.advance(1.0 / 1_000.0);
+        frames += 1;
+
+        assert!(frames < 100_000, "spring never settled");
+    }
+
+    frames
+}
+
+/// The epsilon is in the units of whatever is being animated, which only the
+/// caller knows. A coarser one has to settle sooner, and scaling the epsilon
+/// with the distance has to reproduce the same animation — that is what makes
+/// the same config usable for both an opacity and a pixel offset.
+#[test]
+fn epsilon_controls_when_the_spring_is_settled() {
+    assert_eq!(Spring::new(0.0).epsilon(), 0.001, "default epsilon changed");
+
+    let config = critically_damped();
+
+    let coarse = frames_to_settle(config, 1.0, 0.1);
+    let default = frames_to_settle(config, 1.0, 0.001);
+    let fine = frames_to_settle(config, 1.0, 0.000_01);
+    assert!(
+        coarse < default && default < fine,
+        "a coarser epsilon must settle sooner: {coarse} < {default} < {fine}"
+    );
+
+    // Same journey in different units: 1 unit at 0.001, 1000 units at 1.0.
+    // Only the ratio matters, so these must be the same animation.
+    let small = frames_to_settle(config, 1.0, 0.001);
+    let large = frames_to_settle(config, 1_000.0, 1.0);
+    assert_eq!(
+        small, large,
+        "scaling the travel and the epsilon together changed the animation"
+    );
+}
+
+/// The velocity threshold is `epsilon · ω₀`, so both settle conditions trip at
+/// the same moment. In the tail of a critical spring |v| → ω₀|x|, so a spring
+/// with a fixed velocity threshold instead keeps running until |x| is a small
+/// fraction of the epsilon — a stricter animation than the caller asked for,
+/// and one whose strictness depends on the stiffness.
+#[test]
+fn the_velocity_threshold_scales_with_the_frequency() {
+    const EPSILON: f64 = 0.001;
+
+    for response in [0.2, 0.6, 2.0] {
+        let config = SpringConfig::from_response_damping(response, 1.0);
+
+        let mut spring = Spring::new(0.0)
+            .with_target(1.0)
+            .with_config(config)
+            .with_epsilon(EPSILON);
+
+        // The displacement on the last frame before the spring called it done.
+        let mut displacement = 1.0;
+        let mut frames = 0;
+        while !spring.is_settled() {
+            displacement = (spring.value() - spring.target()).abs();
+            spring.advance(1.0 / 10_000.0);
+
+            frames += 1;
+            assert!(frames < 1_000_000, "spring never settled");
+        }
+
+        assert!(
+            (0.5 * EPSILON..1.5 * EPSILON).contains(&displacement),
+            "response {response}: stopped {displacement} from the target, \
+             expected about {EPSILON} — the two thresholds are not tripping together"
+        );
+    }
 }

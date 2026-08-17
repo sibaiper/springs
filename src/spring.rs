@@ -1,8 +1,7 @@
 use crate::config::SpringConfig;
 use crate::solver::solve;
 
-const DEFAULT_VALUE_EPSILON: f64 = 0.001;
-const DEFAULT_VELOCITY_EPSILON: f64 = 0.001;
+const DEFAULT_EPSILON: f64 = 0.001;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Spring {
@@ -10,6 +9,7 @@ pub struct Spring {
     target: f64,
     velocity: f64,
 
+    epsilon: f64,
     config: SpringConfig,
 }
 
@@ -19,12 +19,22 @@ impl Spring {
             value,
             target: value,
             velocity: 0.0,
+            epsilon: DEFAULT_EPSILON,
             config: SpringConfig::default(),
         }
     }
 
     pub fn with_config(mut self, config: impl Into<SpringConfig>) -> Self {
         self.config = config.into();
+        self
+    }
+
+    /// Sets how close to the target counts as arrived, in the same units as the
+    /// animated value. A spring driving pixels wants a coarser epsilon than one
+    /// driving an opacity: the default of 0.001 is a thousandth of an opacity
+    /// but a thousandth of a pixel.
+    pub fn with_epsilon(mut self, epsilon: f64) -> Self {
+        self.set_epsilon(epsilon);
         self
     }
 
@@ -50,9 +60,22 @@ impl Spring {
         self.target
     }
 
+    pub fn epsilon(&self) -> f64 {
+        self.epsilon
+    }
+
     // setters
     pub fn set_target(&mut self, target: f64) {
         self.target = target;
+    }
+
+    pub fn set_epsilon(&mut self, epsilon: f64) {
+        assert!(
+            epsilon.is_finite() && epsilon > 0.0,
+            "spring epsilon must be finite and greater than zero"
+        );
+
+        self.epsilon = epsilon;
     }
     pub fn set_velocity(&mut self, velocity: f64) {
         self.velocity = velocity;
@@ -92,8 +115,15 @@ impl Spring {
         }
     }
 
+    /// Whether the spring has arrived and stopped.
+    ///
+    /// The velocity threshold is `epsilon · ω₀` rather than a second, unrelated
+    /// constant: the two have different units, and 1/ω₀ is the spring's own
+    /// timescale, so `epsilon · ω₀` is the speed at which it still has about
+    /// `epsilon` of travel left. Pairing them this way makes both conditions
+    /// trip at the same moment instead of leaving the velocity one to dominate.
     pub fn is_settled(&self) -> bool {
-        (self.value - self.target).abs() < DEFAULT_VALUE_EPSILON
-            && self.velocity.abs() < DEFAULT_VELOCITY_EPSILON
+        (self.value - self.target).abs() < self.epsilon
+            && self.velocity.abs() < self.epsilon * self.config.angular_frequency()
     }
 }
