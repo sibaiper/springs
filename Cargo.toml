@@ -3,8 +3,19 @@ name = "springs"
 version = "0.1.1"
 edition = "2024"
 
+# Optional integrations only. Nothing here is downloaded, compiled or linked
+# unless the matching feature is switched on, so a default build of the library
+# is still dependency free.
 [dependencies]
+glam = { version = "0.33", optional = true }
 
-# Only the `visual` example needs a window; the library itself stays dependency free.
+[features]
+default = []
+# `SpringValue`/`SpringDelta` for glam's vector types.
+glam = ["dep:glam"]
+
 [dev-dependencies]
 minifb = "0.28"
+
+[package.metadata.docs.rs]
+all-features = true
