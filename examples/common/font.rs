@@ -3,6 +3,10 @@
 //!
 //! Each glyph is seven rows of five pixels. Bit 4 (`0b10000`) is the leftmost
 //! column, bit 0 the rightmost.
+//!
+//! Shared by the examples; each one uses a subset of the API, so unused
+//! warnings are switched off here.
+#![allow(dead_code)]
 
 pub const GLYPH_WIDTH: i32 = 5;
 pub const GLYPH_HEIGHT: i32 = 7;

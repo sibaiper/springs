@@ -1,4 +1,8 @@
 //! A tiny software renderer over the `0x00RRGGBB` buffer `minifb` presents.
+//!
+//! Shared by the examples; each one uses a subset of the API, so unused
+//! warnings are switched off here.
+#![allow(dead_code)]
 
 use crate::font;
 
@@ -134,4 +138,83 @@ impl Canvas {
 
         cursor
     }
+}
+
+/// Shapes built on top of the primitives above.
+impl Canvas {
+    /// An anti-aliased line with rounded ends, of the given stroke `weight`.
+    pub fn line(&mut self, from: (f64, f64), to: (f64, f64), weight: f64, color: u32) {
+        let (x0, y0) = from;
+        let (x1, y1) = to;
+        let (dx, dy) = (x1 - x0, y1 - y0);
+        let length_squared = dx * dx + dy * dy;
+
+        let reach = weight * 0.5 + 1.0;
+        let left = (x0.min(x1) - reach).floor() as i32;
+        let right = (x0.max(x1) + reach).ceil() as i32;
+        let top = (y0.min(y1) - reach).floor() as i32;
+        let bottom = (y0.max(y1) + reach).ceil() as i32;
+
+        for y in top..=bottom {
+            for x in left..=right {
+                let (px, py) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+
+                // Nearest point on the segment, then distance to it.
+                let along = if length_squared > 0.0 {
+                    (((px - x0) * dx + (py - y0) * dy) / length_squared).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let distance = (px - (x0 + along * dx)).hypot(py - (y0 + along * dy));
+
+                self.blend(x, y, color, (weight * 0.5 + 0.5 - distance).clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    /// An anti-aliased rounded rectangle, via the usual rounded-box distance
+    /// field: distance outside the corners plus distance inside the body.
+    pub fn rounded_rect(
+        &mut self,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        radius: f64,
+        color: u32,
+    ) {
+        let radius = radius.min(width * 0.5).min(height * 0.5).max(0.0);
+        let (cx, cy) = (x + width * 0.5, y + height * 0.5);
+        let (half_width, half_height) = (width * 0.5 - radius, height * 0.5 - radius);
+
+        let left = (x - 1.0).floor() as i32;
+        let right = (x + width + 1.0).ceil() as i32;
+        let top = (y - 1.0).floor() as i32;
+        let bottom = (y + height + 1.0).ceil() as i32;
+
+        for row in top..=bottom {
+            for column in left..=right {
+                let px = (f64::from(column) + 0.5 - cx).abs() - half_width;
+                let py = (f64::from(row) + 0.5 - cy).abs() - half_height;
+
+                let outside = px.max(0.0).hypot(py.max(0.0));
+                let inside = px.max(py).min(0.0);
+                let distance = outside + inside - radius;
+
+                self.blend(column, row, color, (0.5 - distance).clamp(0.0, 1.0));
+            }
+        }
+    }
+}
+
+/// Linear blend between two `0x00RRGGBB` colours.
+pub fn mix(from: u32, to: u32, amount: f64) -> u32 {
+    let amount = amount.clamp(0.0, 1.0);
+    let channel = |shift: u32| {
+        let start = ((from >> shift) & 0xFF) as f64;
+        let end = ((to >> shift) & 0xFF) as f64;
+        ((start + (end - start) * amount).round() as u32) << shift
+    };
+
+    channel(16) | channel(8) | channel(0)
 }

@@ -20,7 +20,9 @@
 //! cargo run --example visual
 //! ```
 
+#[path = "../common/canvas.rs"]
 mod canvas;
+#[path = "../common/font.rs"]
 mod font;
 
 use std::collections::VecDeque;
