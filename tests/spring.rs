@@ -5,7 +5,7 @@
 //! equation of motion itself or a property the animation must have (no
 //! overshoot, finiteness, frame-rate independence, ...).
 
-use springs::{Spring, SpringConfig, SpringDelta, SpringValue};
+use springs::{Angle, Spring, SpringConfig, SpringDelta, SpringValue};
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -203,7 +203,7 @@ fn at_equilibrium_stays_at_equilibrium() {
 #[test]
 fn at_target_with_nonzero_velocity_remains_finite() {
     for (regime, config) in regimes() {
-        let mut spring = Spring::new(0.0).with_config(config).with_velocity(100.0);
+        let mut spring = Spring::new(0.0f64).with_config(config).with_velocity(100.0);
         assert_eq!(spring.value() - spring.target(), 0.0);
 
         let mut excursion = 0.0f64;
@@ -662,7 +662,7 @@ fn the_velocity_threshold_scales_with_the_frequency() {
     for response in [0.2, 0.6, 2.0] {
         let config = SpringConfig::from_response_damping(response, 1.0);
 
-        let mut spring = Spring::new(0.0)
+        let mut spring = Spring::new(0.0f64)
             .with_target(1.0)
             .with_config(config)
             .with_epsilon(EPSILON);
@@ -806,4 +806,178 @@ fn a_two_dimensional_spring_settles_on_its_target() {
     assert!(spring.is_settled(), "never settled");
     assert_eq!(spring.value(), Vec2::new(3.0, -4.0), "settled off target");
     assert_eq!(spring.velocity(), Vec2::zero(), "settled still moving");
+}
+
+// ---------------------------------------------------------------------------
+// Arrays
+// ---------------------------------------------------------------------------
+
+/// The const-generic array impl has to behave like the hand-written `Vec2`
+/// above: one independent scalar spring per component, whatever the length.
+#[test]
+fn an_array_spring_is_a_bundle_of_scalar_springs() {
+    const STARTS: [f64; 3] = [0.0, 5.0, -2.0];
+    const TARGETS: [f64; 3] = [3.0, -4.0, 8.0];
+    const VELOCITIES: [f64; 3] = [1.5, 2.5, -0.5];
+
+    let config = underdamped();
+    let epsilon = 1e-12;
+
+    let mut bundle = Spring::new(STARTS)
+        .with_target(TARGETS)
+        .with_velocity(VELOCITIES)
+        .with_config(config)
+        .with_epsilon(epsilon);
+
+    let mut scalars: Vec<Spring<f64>> = (0..3)
+        .map(|axis| {
+            Spring::new(STARTS[axis])
+                .with_target(TARGETS[axis])
+                .with_velocity(VELOCITIES[axis])
+                .with_config(config)
+                .with_epsilon(epsilon)
+        })
+        .collect();
+
+    for frame in 0..240 {
+        bundle.advance(1.0 / 240.0);
+        for scalar in &mut scalars {
+            scalar.advance(1.0 / 240.0);
+        }
+
+        for (axis, scalar) in scalars.iter().enumerate() {
+            let at = format!("component {axis} on frame {frame}");
+            assert_eq!(bundle.value()[axis], scalar.value(), "value, {at}");
+            assert_eq!(bundle.velocity()[axis], scalar.velocity(), "velocity, {at}");
+        }
+    }
+}
+
+/// Settling for an array is about the euclidean distance left to travel, not
+/// about any single component.
+#[test]
+fn an_array_spring_settles_on_the_euclidean_distance() {
+    // (3, -4) is 5 away, so a spring with an epsilon of 4 is not there yet even
+    // though neither component is more than 4 out on its own.
+    let spring = Spring::new([0.0, 0.0])
+        .with_target([3.0, -4.0])
+        .with_config(critically_damped())
+        .with_epsilon(4.0);
+    assert!(!spring.is_settled());
+
+    let mut spring = spring.with_epsilon(0.001);
+    for _ in 0..1_200 {
+        spring.advance(1.0 / 240.0);
+    }
+
+    assert!(spring.is_settled(), "never settled");
+    assert_eq!(spring.value(), [3.0, -4.0]);
+    assert_eq!(spring.velocity(), [0.0, 0.0]);
+}
+
+/// The same impls cover `f32`, scalar and array alike.
+#[test]
+fn f32_springs_settle_on_their_target() {
+    let mut scalar = Spring::new(0.0f32)
+        .with_target(1.0f32)
+        .with_config(critically_damped());
+
+    let mut array = Spring::new([0.0f32, 0.0])
+        .with_target([3.0f32, -4.0])
+        .with_config(critically_damped());
+
+    for _ in 0..600 {
+        scalar.advance(1.0 / 60.0);
+        array.advance(1.0 / 60.0);
+    }
+
+    assert!(scalar.is_settled() && array.is_settled(), "never settled");
+    assert_eq!(scalar.value(), 1.0f32);
+    assert_eq!(array.value(), [3.0f32, -4.0]);
+}
+
+// ---------------------------------------------------------------------------
+// Angles
+// ---------------------------------------------------------------------------
+
+/// The point of the type: 359° → 2° is a 3° nudge forwards, never a 357°
+/// journey the other way round. Summing the per-frame steps distinguishes the
+/// two unambiguously — the long way would total -357.
+#[test]
+fn an_angle_spring_takes_the_short_way_round() {
+    let cases: [(f64, f64, f64); 6] = [
+        (359.0, 2.0, 3.0),
+        (2.0, 359.0, -3.0),
+        (350.0, 10.0, 20.0),
+        (10.0, 350.0, -20.0),
+        (0.0, 90.0, 90.0),
+        (270.0, 45.0, 135.0),
+    ];
+
+    for (start, target, expected) in cases {
+        // Critically damped, so the spring never legitimately reverses and any
+        // backwards step is the wrap picking the wrong arc.
+        let mut spring = Spring::new(Angle::from_degrees(start))
+            .with_target(Angle::from_degrees(target))
+            .with_config(SpringConfig::from_response_damping(0.4, 1.0))
+            .with_epsilon(1e-9);
+
+        let mut travelled = 0.0;
+        let mut previous = spring.value();
+
+        for _ in 0..4_000 {
+            spring.advance(1.0 / 1_000.0);
+
+            let stepped = spring.value().displacement_from(previous).to_degrees();
+            assert!(
+                stepped * expected.signum() >= -1e-9,
+                "{start}° → {target}°: stepped {stepped}°, the wrong way"
+            );
+
+            travelled += stepped;
+            previous = spring.value();
+        }
+
+        assert_close(
+            travelled,
+            expected,
+            1e-6,
+            &format!("total rotation from {start}° to {target}°"),
+        );
+        assert_close(
+            spring.value().degrees(),
+            target,
+            1e-6,
+            &format!("final angle from {start}°"),
+        );
+    }
+}
+
+/// Angles are normalised on construction and stay normalised as they animate,
+/// so `degrees()` is always a number you can hand straight to a transform.
+#[test]
+fn angles_stay_normalised() {
+    assert_close(Angle::from_degrees(370.0).degrees(), 10.0, 1e-9, "370°");
+    assert_close(Angle::from_degrees(-90.0).degrees(), 270.0, 1e-9, "-90°");
+    assert_close(Angle::from_degrees(720.0).degrees(), 0.0, 1e-9, "720°");
+
+    // A hard kick spins the angle through several rotations; every reported
+    // value must still be in range.
+    let mut spring = Spring::new(Angle::from_degrees(0.0))
+        .with_target(Angle::from_degrees(90.0))
+        .with_config(SpringConfig::from_response_damping(0.5, 0.4));
+    spring.add_velocity(60.0);
+
+    for _ in 0..2_000 {
+        spring.advance(1.0 / 200.0);
+
+        let degrees = spring.value().degrees();
+        assert!(
+            (0.0..360.0).contains(&degrees),
+            "angle escaped its range: {degrees}°"
+        );
+    }
+
+    assert!(spring.is_settled(), "never settled");
+    assert_close(spring.value().degrees(), 90.0, 1e-9, "final angle");
 }

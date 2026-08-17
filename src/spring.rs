@@ -39,36 +39,6 @@ pub trait SpringDelta: Copy {
     fn magnitude(self) -> f64;
 }
 
-impl SpringDelta for f64 {
-    fn zero() -> Self {
-        0.0
-    }
-
-    fn add(self, other: Self) -> Self {
-        self + other
-    }
-
-    fn scale(self, scalar: f64) -> Self {
-        self * scalar
-    }
-
-    fn magnitude(self) -> f64 {
-        self.abs()
-    }
-}
-
-impl SpringValue for f64 {
-    type Delta = f64;
-
-    fn displacement_from(self, target: Self) -> Self::Delta {
-        self - target
-    }
-
-    fn add_displacement(self, displacement: Self::Delta) -> Self {
-        self + displacement
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct Spring<T>
 where
