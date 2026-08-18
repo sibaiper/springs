@@ -1,7 +1,15 @@
 [package]
 name = "springs"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
+rust-version = "1.85"
+description = "Frame-rate-independent spring animations using an analytical damped-oscillator solver"
+repository = "https://github.com/sibaiper/springs"
+documentation = "https://docs.rs/springs"
+readme = "README.md"
+license = "MIT"
+keywords = ["animation", "spring", "physics", "ui", "interpolation"]
+categories = ["game-development", "graphics", "gui"]
 
 # Optional integrations only. Nothing here is downloaded, compiled or linked
 # unless the matching feature is switched on, so a default build of the library
