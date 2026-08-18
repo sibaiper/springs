@@ -428,31 +428,225 @@ fn duration_and_bounce_build_the_same_config_as_from_duration_bounce() {
     assert_eq!(reversed.damping_ratio(), built.damping_ratio());
 }
 
+/// Whether `build` returns rather than panicking.
+///
+/// The panic hook is silenced for the call so an expected rejection does not
+/// litter the test output, and restored before returning so a genuine failure
+/// still prints normally.
+fn is_accepted(build: impl FnOnce() -> SpringConfig + std::panic::UnwindSafe) -> bool {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+
+    let outcome = std::panic::catch_unwind(build);
+
+    std::panic::set_hook(previous_hook);
+
+    outcome.is_ok()
+}
+
 /// The degenerate configs have to be rejected at construction rather than
 /// producing a spring that never arrives: ω₀ = 0 drifts in a straight line for
 /// ever, and NaN poisons every value that touches it.
 #[test]
 fn duration_rejects_non_finite_and_non_positive_values() {
-    const REJECTED: [f64; 5] = [0.0, -0.5, f64::INFINITY, f64::NEG_INFINITY, f64::NAN];
+    for duration in [0.0, -0.5, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        assert!(
+            !is_accepted(move || SpringConfig::new().duration(duration)),
+            "duration() accepted {duration}"
+        );
+    }
+}
 
-    // Silence the panic hook so the rejections do not litter the test output,
-    // then restore it before asserting so a real failure still prints.
-    let previous_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
+/// `response` is a duration under another name, so it has to reject the same
+/// values — infinity in particular, which passes a bare `> 0.0` test and turns
+/// into ω₀ = TAU / ∞ = 0.
+///
+/// A zero ω₀ is not merely slow. The underdamped branch divides by
+/// ω_d = ω₀√(1 - ζ²) and the overdamped branch divides by r₁ - r₂, both of
+/// which are zero, so two of the three regimes hand back NaN. The third
+/// degenerates into `x' = x + v·dt` — a free particle that never arrives.
+#[test]
+fn from_response_damping_rejects_non_finite_and_non_positive_values() {
+    for response in [0.0, -0.5, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        assert!(
+            !is_accepted(move || SpringConfig::from_response_damping(response, 1.0)),
+            "from_response_damping() accepted a response of {response}"
+        );
+    }
 
-    let accepted: Vec<f64> = REJECTED
-        .into_iter()
-        .filter(|&duration| {
-            std::panic::catch_unwind(|| SpringConfig::new().duration(duration)).is_ok()
-        })
-        .collect();
+    // An infinite damping ratio is NaN on arrival: the overdamped branch
+    // computes -ζω₀ + ω₀√(ζ² - 1), which for an infinite ζ is -∞ + ∞.
+    for damping_ratio in [-0.5, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        assert!(
+            !is_accepted(move || SpringConfig::from_response_damping(0.5, damping_ratio)),
+            "from_response_damping() accepted a damping ratio of {damping_ratio}"
+        );
+    }
 
-    std::panic::set_hook(previous_hook);
-
-    assert!(
-        accepted.is_empty(),
-        "duration() accepted the degenerate values {accepted:?}"
+    // Ordinary values still land where they should.
+    let config = SpringConfig::from_response_damping(0.4, 0.6);
+    assert_close(
+        config.angular_frequency(),
+        std::f64::consts::TAU / 0.4,
+        1e-12,
+        "ω₀ from a 0.4 s response",
     );
+    assert_close(config.damping_ratio(), 0.6, 1e-12, "ζ");
+}
+
+/// The bug this guards against was not one constructor being wrong; it was the
+/// constructors disagreeing. `duration`, `from_duration_bounce` and
+/// `from_physical` all rejected an infinite parameter while
+/// `from_response_damping` waved it through, so whether a bad config was caught
+/// depended on which spelling the caller happened to reach for — and the
+/// builders are further entry points that must not become a way around it.
+#[test]
+fn every_constructor_rejects_a_non_finite_parameter() {
+    type Constructor = fn(f64) -> SpringConfig;
+
+    const ENTRY_POINTS: [(&str, Constructor); 14] = [
+        ("duration", |bad| SpringConfig::new().duration(bad)),
+        ("bounce", |bad| SpringConfig::new().bounce(bad)),
+        ("from_duration_bounce duration", |bad| {
+            SpringConfig::from_duration_bounce(bad, 0.0)
+        }),
+        ("from_duration_bounce bounce", |bad| {
+            SpringConfig::from_duration_bounce(0.3, bad)
+        }),
+        ("from_response_damping response", |bad| {
+            SpringConfig::from_response_damping(bad, 1.0)
+        }),
+        ("from_response_damping damping", |bad| {
+            SpringConfig::from_response_damping(0.3, bad)
+        }),
+        ("from_physical mass", |bad| {
+            SpringConfig::from_physical(bad, 100.0, 10.0)
+        }),
+        ("from_physical stiffness", |bad| {
+            SpringConfig::from_physical(1.0, bad, 10.0)
+        }),
+        ("from_physical damping", |bad| {
+            SpringConfig::from_physical(1.0, 100.0, bad)
+        }),
+        ("responsive().response", |bad| {
+            SpringConfig::responsive().response(bad).build()
+        }),
+        ("responsive().damping", |bad| {
+            SpringConfig::responsive().damping(bad).build()
+        }),
+        ("physical().mass", |bad| {
+            SpringConfig::physical().mass(bad).build()
+        }),
+        ("physical().stiffness", |bad| {
+            SpringConfig::physical().stiffness(bad).build()
+        }),
+        ("physical().damping", |bad| {
+            SpringConfig::physical().damping(bad).build()
+        }),
+    ];
+
+    for bad in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        for (name, construct) in ENTRY_POINTS {
+            assert!(
+                !is_accepted(move || construct(bad)),
+                "{name} accepted {bad}"
+            );
+        }
+    }
+}
+
+/// ζ = 0 is an undamped spring: mathematically the best behaved case in the
+/// solver — the transition matrix is a pure rotation and energy is conserved to
+/// a part in 10¹² — but it never stops. `is_settled` is false for ever, so a
+/// render loop written as `while !spring.is_settled()` never exits and whatever
+/// drives it is never released.
+///
+/// It is reachable by several different spellings, and the point of this test
+/// is that they agree. Before this, `bounce(1.0)` was rejected while
+/// `from_duration_bounce(0.3, 1.0)` — the same request, differently phrased —
+/// went through.
+#[test]
+fn every_constructor_rejects_an_undamped_spring() {
+    type Door = fn() -> SpringConfig;
+
+    let doors: [(&str, Door); 6] = [
+        ("bounce(1.0)", || SpringConfig::new().bounce(1.0)),
+        ("from_duration_bounce(_, 1.0)", || {
+            SpringConfig::from_duration_bounce(0.3, 1.0)
+        }),
+        ("from_response_damping(_, 0.0)", || {
+            SpringConfig::from_response_damping(0.3, 0.0)
+        }),
+        ("from_physical(_, _, 0.0)", || {
+            SpringConfig::from_physical(1.0, 100.0, 0.0)
+        }),
+        ("responsive().damping(0.0)", || {
+            SpringConfig::responsive().damping(0.0).build()
+        }),
+        ("physical().damping(0.0)", || {
+            SpringConfig::physical().damping(0.0).build()
+        }),
+    ];
+
+    for (name, construct) in doors {
+        assert!(
+            !is_accepted(construct),
+            "{name} built an undamped spring, which never settles"
+        );
+    }
+
+    // A hair above zero is still a legal spring, however lightly damped: the
+    // rule is "damped at all", not "damped enough to look sensible".
+    let barely = SpringConfig::from_response_damping(0.3, 1e-9);
+    assert!(barely.damping_ratio() > 0.0);
+
+    let mut spring = Spring::new(0.0f64)
+        .with_target(1.0)
+        .with_config(SpringConfig::new().duration(0.3).bounce(0.999));
+    advance_for(&mut spring, 2.0, 240.0);
+    assert!(spring.value().is_finite() && spring.velocity().is_finite());
+}
+
+/// The property all of that validation exists to protect: nothing a caller can
+/// legally construct may put a NaN into a trajectory.
+///
+/// NaN is the failure that matters because it never compares true to anything,
+/// so `is_settled` stays false for ever and a render loop written as
+/// `while !spring.is_settled()` never stops — with a value that rasterises to
+/// nothing. The sweep deliberately straddles the ζ = 1 branch boundary, where
+/// ω_d and r₁ - r₂ both approach zero.
+#[test]
+fn no_valid_config_produces_a_non_finite_trajectory() {
+    const DAMPING_RATIOS: [f64; 9] = [
+        1e-6, 0.05, 0.5, 0.999_9, 0.999_99, 1.0, 1.000_01, 1.000_1, 6.0,
+    ];
+
+    for response in [0.05, 0.2, 1.0, 4.0] {
+        for damping_ratio in DAMPING_RATIOS {
+            let config = SpringConfig::from_response_damping(response, damping_ratio);
+            assert!(
+                config.angular_frequency().is_finite() && config.angular_frequency() > 0.0,
+                "response {response}: ω₀ is {}",
+                config.angular_frequency()
+            );
+
+            let mut spring = Spring::new(0.0f64)
+                .with_target(1.0)
+                .with_velocity(25.0)
+                .with_config(config);
+
+            for frame in 0..600 {
+                spring.advance(1.0 / 60.0);
+
+                assert!(
+                    spring.value().is_finite() && spring.velocity().is_finite(),
+                    "response {response}, ζ {damping_ratio}: value {} velocity {} on frame {frame}",
+                    spring.value(),
+                    spring.velocity()
+                );
+            }
+        }
+    }
 }
 
 /// A config built through `duration` must produce a spring that actually
@@ -565,10 +759,11 @@ fn physical_config_produces_expected_damping_and_frequency() {
     // c = 2√(k·m) is the definition of critical damping, and c = 0 of none.
     let critical = SpringConfig::from_physical(2.0, 200.0, 2.0 * (200.0f64 * 2.0).sqrt());
     assert_close(critical.damping_ratio(), 1.0, 1e-12, "ζ at c = 2√(k·m)");
-    assert_eq!(
-        SpringConfig::from_physical(2.0, 200.0, 0.0).damping_ratio(),
-        0.0
-    );
+    // ... and zero damping is no longer a config at all: it is an undamped
+    // spring, which never settles.
+    assert!(!is_accepted(|| SpringConfig::from_physical(
+        2.0, 200.0, 0.0
+    )));
 
     // ω₀ scales as √(k/m): four times the stiffness is twice the frequency.
     let stiffer = SpringConfig::from_physical(2.0, 800.0, 8.0);
@@ -980,4 +1175,55 @@ fn angles_stay_normalised() {
 
     assert!(spring.is_settled(), "never settled");
     assert_close(spring.value().degrees(), 90.0, 1e-9, "final angle");
+}
+
+/// A spring holds the only copy of its config, so it has to hand it back —
+/// otherwise every caller that wants to display ζ or ω₀ keeps a duplicate
+/// beside the spring, and the two can drift apart.
+#[test]
+fn a_spring_reports_the_config_it_was_built_with() {
+    let config = SpringConfig::new().duration(0.42).bounce(0.3);
+    let spring = Spring::new(0.0f64).with_config(config);
+
+    assert_eq!(spring.config().damping_ratio(), config.damping_ratio());
+    assert_eq!(
+        spring.config().angular_frequency(),
+        config.angular_frequency()
+    );
+
+    // The default is the default config, not something invented in `new`.
+    let default = Spring::new(0.0f64);
+    assert_eq!(
+        default.config().angular_frequency(),
+        SpringConfig::default().angular_frequency()
+    );
+    assert_eq!(
+        default.config().damping_ratio(),
+        SpringConfig::default().damping_ratio()
+    );
+
+    // And it tracks a replacement rather than reporting the original.
+    let replaced = spring.with_config(SpringConfig::from_response_damping(0.9, 2.0));
+    assert_close(
+        replaced.config().angular_frequency(),
+        std::f64::consts::TAU / 0.9,
+        1e-12,
+        "ω₀ after with_config",
+    );
+    assert_close(
+        replaced.config().damping_ratio(),
+        2.0,
+        1e-12,
+        "ζ after with_config",
+    );
+
+    // What the getter is actually for: the reported ω₀ is the one the settle
+    // threshold uses, so a caller can predict when the spring will stop.
+    let mut spring = Spring::new(0.0f64)
+        .with_target(1.0)
+        .with_config(config)
+        .with_epsilon(0.01);
+    advance_for(&mut spring, 3.0, 240.0);
+    assert!(spring.is_settled());
+    assert!(spring.velocity().abs() < spring.epsilon() * spring.config().angular_frequency());
 }

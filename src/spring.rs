@@ -106,6 +106,12 @@ where
         self.epsilon
     }
 
+    /// The config driving this spring, so a caller can read back ζ and ω₀
+    /// without keeping a second copy of it alongside.
+    pub fn config(&self) -> SpringConfig {
+        self.config
+    }
+
     // setters
     pub fn set_target(&mut self, target: T) {
         self.target = target;

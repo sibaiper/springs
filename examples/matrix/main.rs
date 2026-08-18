@@ -66,9 +66,7 @@ struct Cell {
 
 impl Cell {
     fn config(&self) -> SpringConfig {
-        SpringConfig::new()
-            .duration(self.duration)
-            .bounce(self.bounce)
+        self.spring.config()
     }
 
     fn window(&self, normalised: bool) -> f64 {

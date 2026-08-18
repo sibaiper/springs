@@ -29,8 +29,6 @@ const PLOT_LEFT: f64 = 60.0;
 struct Trace {
     label: &'static str,
     colour: u32,
-    /// Kept alongside the spring because `Spring` does not expose its config.
-    omega: f64,
     spring: Spring<f64>,
     trail: Vec<(f64, f64)>,
     history: Vec<f64>,
@@ -61,7 +59,6 @@ impl Phase {
             .map(|(label, colour, zeta)| Trace {
                 label,
                 colour,
-                omega: SpringConfig::from_response_damping(RESPONSE, zeta).angular_frequency(),
                 spring: Spring::new(0.0)
                     .with_config(SpringConfig::from_response_damping(RESPONSE, zeta))
                     .with_epsilon(0.002),
@@ -83,7 +80,7 @@ impl Phase {
         self.idle = 0.0;
 
         for trace in &mut self.traces {
-            let omega = trace.omega;
+            let omega = trace.spring.config().angular_frequency();
 
             trace.spring.snap_to(displacement);
             trace.spring.set_target(0.0);
@@ -115,7 +112,7 @@ impl Phase {
         for trace in &mut self.traces {
             trace.spring.advance(input.dt);
 
-            let omega = trace.omega;
+            let omega = trace.spring.config().angular_frequency();
             trace
                 .trail
                 .push((trace.spring.value(), trace.spring.velocity() / omega));

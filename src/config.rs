@@ -38,11 +38,12 @@ impl SpringConfig {
     pub fn from_duration_bounce(duration: f64, bounce: f64) -> Self {
         assert!(
             duration.is_finite() && duration > 0.0,
-            "spring duration must be greater than zero"
+            "spring duration must be finite and greater than zero"
         );
         assert!(
-            bounce.is_finite() && (-1.0..=1.0).contains(&bounce),
-            "spring bounce must be between -1.0 and 1.0"
+            bounce.is_finite() && (-1.0..1.0).contains(&bounce),
+            "spring bounce must be in -1.0..1.0; a bounce of 1.0 is an undamped \
+             spring, which oscillates for ever and never settles"
         );
 
         Self {
@@ -52,8 +53,15 @@ impl SpringConfig {
     }
 
     pub fn from_response_damping(response: f64, damping_ratio: f64) -> Self {
-        assert!(response > 0.0);
-        assert!(damping_ratio >= 0.0);
+        assert!(
+            response.is_finite() && response > 0.0,
+            "spring response must be finite and greater than zero"
+        );
+        assert!(
+            damping_ratio.is_finite() && damping_ratio > 0.0,
+            "spring damping ratio must be finite and greater than zero; a ratio of \
+             zero is an undamped spring, which oscillates for ever and never settles"
+        );
 
         Self {
             damping_ratio,
@@ -62,9 +70,19 @@ impl SpringConfig {
     }
 
     pub fn from_physical(mass: f64, stiffness: f64, damping: f64) -> Self {
-        assert!(mass.is_finite() && mass > 0.0);
-        assert!(stiffness.is_finite() && stiffness > 0.0);
-        assert!(damping.is_finite() && damping >= 0.0);
+        assert!(
+            mass.is_finite() && mass > 0.0,
+            "spring mass must be finite and greater than zero"
+        );
+        assert!(
+            stiffness.is_finite() && stiffness > 0.0,
+            "spring stiffness must be finite and greater than zero"
+        );
+        assert!(
+            damping.is_finite() && damping > 0.0,
+            "spring damping must be finite and greater than zero; zero damping is \
+             an undamped spring, which oscillates for ever and never settles"
+        );
 
         Self {
             angular_frequency: (stiffness / mass).sqrt(),

@@ -78,7 +78,6 @@ const GHOST_INK: u32 = 0xE6EDF3;
 struct Lane {
     label: &'static str,
     color: u32,
-    config: SpringConfig,
 
     /// Stepped once per rendered frame.
     spring: Spring<f64>,
@@ -96,7 +95,7 @@ impl Lane {
         Self {
             label,
             color,
-            config,
+
             spring,
             snapshot: spring,
             elapsed: 0.0,
@@ -328,8 +327,8 @@ fn draw_lanes(canvas: &mut Canvas, lanes: &[Lane], target: f64) {
             TEXT_DIM,
             &format!(
                 "ZETA {:.2}  W0 {:.1}",
-                lane.config.damping_ratio(),
-                lane.config.angular_frequency()
+                lane.spring.config().damping_ratio(),
+                lane.spring.config().angular_frequency()
             ),
         );
         canvas.text(
