@@ -21,6 +21,7 @@ cargo run --example matrix --release
 cargo run --example gestures --release
 cargo run --example gallery --release
 cargo run --example shapes --release
+cargo run --example bloom --release
 ```
 
 - `visual` places per-frame advancement over a single analytical jump. The two
@@ -31,6 +32,8 @@ cargo run --example shapes --release
   and phase portraits.
 - `shapes` is a looping kinetic study: geometric forms morph, rotate, snap into
   new assemblies, and move in offset rhythms at the same time.
+- `bloom` sends capsules, diamonds, and rings through five luminous spring
+  choreographies with motion trails and interruptible transitions.
 
 ## API showcase
 
