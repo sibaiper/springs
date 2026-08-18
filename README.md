@@ -2,6 +2,7 @@
 
 Frame-rate-independent spring animations for Rust, powered by an analytical
 damped-oscillator solver.
+![springs](springs.png)
 
 `springs` advances directly to the state at `t + dt`; it does not approximate
 the motion with Euler integration or fixed substeps. A 20 FPS stutter and a
@@ -9,6 +10,7 @@ the motion with Euler integration or fixed substeps. A 20 FPS stutter and a
 target changes at the same times.
 
 The default build has no dependencies.
+
 
 ## Try the demos
 
