@@ -142,6 +142,63 @@ impl Canvas {
 
 /// Shapes built on top of the primitives above.
 impl Canvas {
+    pub fn polygon(&mut self, points: &[(f64, f64)], color: u32) {
+        if points.len() < 3 {
+            return;
+        }
+
+        let top = points
+            .iter()
+            .map(|(_, y)| *y)
+            .fold(f64::INFINITY, f64::min)
+            .floor() as i32;
+        let bottom = points
+            .iter()
+            .map(|(_, y)| *y)
+            .fold(f64::NEG_INFINITY, f64::max)
+            .ceil() as i32;
+        let mut intersections = Vec::with_capacity(points.len());
+
+        for row in top.max(0)..=bottom.min(self.height - 1) {
+            let scanline = f64::from(row) + 0.5;
+            intersections.clear();
+
+            for index in 0..points.len() {
+                let from = points[index];
+                let to = points[(index + 1) % points.len()];
+                let crosses_scanline = (from.1 <= scanline && to.1 > scanline)
+                    || (to.1 <= scanline && from.1 > scanline);
+
+                if crosses_scanline {
+                    let progress = (scanline - from.1) / (to.1 - from.1);
+                    intersections.push(from.0 + progress * (to.0 - from.0));
+                }
+            }
+
+            intersections.sort_by(f64::total_cmp);
+            for span in intersections.chunks_exact(2) {
+                let left = span[0].ceil() as i32;
+                let right = span[1].floor() as i32;
+                self.rect(left, row, right - left + 1, 1, color);
+            }
+        }
+    }
+
+    pub fn polygon_outline(&mut self, points: &[(f64, f64)], weight: f64, color: u32) {
+        if points.len() < 2 {
+            return;
+        }
+
+        for index in 0..points.len() {
+            self.line(
+                points[index],
+                points[(index + 1) % points.len()],
+                weight,
+                color,
+            );
+        }
+    }
+
     /// An anti-aliased line with rounded ends, of the given stroke `weight`.
     pub fn line(&mut self, from: (f64, f64), to: (f64, f64), weight: f64, color: u32) {
         let (x0, y0) = from;

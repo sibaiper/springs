@@ -14,11 +14,13 @@ The default build has no dependencies.
 
 Clone the repository and run any example:
 
+_some of these are compute heavy, so make sure to run with --release_
 ```text
 cargo run --example visual --release
 cargo run --example matrix --release
 cargo run --example gestures --release
 cargo run --example gallery --release
+cargo run --example shapes --release
 ```
 
 - `visual` places per-frame advancement over a single analytical jump. The two
@@ -27,6 +29,8 @@ cargo run --example gallery --release
 - `gestures` demonstrates drag, flick, momentum, snapping, and overscroll.
 - `gallery` collects cursor following, shortest-path angles, interface motion,
   and phase portraits.
+- `shapes` is a looping kinetic study: geometric forms morph, rotate, snap into
+  new assemblies, and move in offset rhythms at the same time.
 
 ## API showcase
 
