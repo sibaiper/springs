@@ -23,6 +23,7 @@ default = []
 glam = ["dep:glam"]
 
 [dev-dependencies]
+gpui = "0.2.2"
 minifb = "0.28"
 
 [package.metadata.docs.rs]

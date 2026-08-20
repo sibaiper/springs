@@ -24,6 +24,7 @@ cargo run --example gestures --release
 cargo run --example gallery --release
 cargo run --example shapes --release
 cargo run --example bloom --release
+cargo run --example gpui --release
 ```
 
 - `visual` places per-frame advancement over a single analytical jump. The two
@@ -36,6 +37,8 @@ cargo run --example bloom --release
   new assemblies, and move in offset rhythms at the same time.
 - `bloom` sends capsules, diamonds, and rings through five luminous spring
   choreographies with motion trails and interruptible transitions.
+- `gpui` builds a release-control dashboard from native GPUI elements and uses
+  `springs` for its tab, workflow, toggle, and details-panel motion.
 
 ## API showcase
 
